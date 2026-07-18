@@ -64,8 +64,9 @@ jobs:
           SCREENER_MAX_STOCKS: ${{ vars.SCREENER_MAX_STOCKS || '20' }}
         run: |
           echo '🔍 开始短线选股...'
-          STOCK_LIST=$(python3 -c "
-          import time, random, sys
+          STOCK_LIST=$(python3 2>/dev/null -c "
+          import time, random, sys, logging
+          logging.disable(logging.CRITICAL)
 
           def try_sina():
               import akshare as ak
@@ -83,16 +84,12 @@ jobs:
           df = None
           for attempt, fetcher in enumerate([try_sina, try_em], 1):
               try:
-                  print(f' 尝试数据源 {attempt}...')
                   df = fetcher()
-                  print(f' 全市场 {len(df)} 只')
                   break
               except Exception as e:
-                  print(f' 失败: {e}')
                   time.sleep(random.uniform(2,5))
 
           if df is None:
-              print('所有数据源均失败')
               sys.exit(0)
 
           import pandas as pd
@@ -116,10 +113,7 @@ jobs:
 
           result = df[mask].sort_values('量比' if '量比' in cols else '涨跌幅', ascending=False).head(max_n)
           codes = ','.join(result['代码'].astype(str).tolist())
-          print(f'选中 {len(result)} 只: {codes}')
-          for _,r in result.iterrows():
-              print(f'  {r[\"代码\"]} {r[\"名称\"]} 涨跌幅:{r.get(\"涨跌幅\",\"?\")}% 量比:{r.get(\"量比\",\"?\")}')
-          print(codes, end='')
+          print(codes)
           ")
 
           if [ -z "$STOCK_LIST" ]; then
