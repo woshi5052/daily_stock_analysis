@@ -1,5 +1,5 @@
 name: 每日股票分析
- 
+
 on:
   schedule:
     - cron: '0 10 * * 1-5'
@@ -19,39 +19,39 @@ on:
         required: false
         default: false
         type: boolean
- 
+
 concurrency:
   group: stock-analysis
   cancel-in-progress: false
- 
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
     environment: STOCK_LIST
     timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '60') }}
- 
+
     steps:
       - name: 随机延迟
         run: sleep $((RANDOM % 60))
- 
+
       - name: 检出代码
         uses: actions/checkout@v5
- 
+
       - name: 设置 Python 环境
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
- 
+
       - name: 安装依赖
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
- 
+
       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
- 
+
       - name: 短线全市场选股
         id: screener
         env:
@@ -63,69 +63,72 @@ jobs:
           SCREENER_MAX_TURNOVER: ${{ vars.SCREENER_MAX_TURNOVER || '15' }}
           SCREENER_MAX_STOCKS: ${{ vars.SCREENER_MAX_STOCKS || '20' }}
         run: |
-          python -c "
-          import akshare as ak
+          echo '🔍 开始短线选股...'
+          STOCK_LIST=$(python3 -c "
+          import time, random, sys
+
+          def try_sina():
+              import akshare as ak
+              df = ak.stock_zh_a_spot()
+              rename = {'代码':'代码','名称':'名称','今开':'今开','最新价':'最新价','涨跌幅':'涨跌幅','量比':'量比','换手率':'换手率'}
+              for k,v in rename.items():
+                  if k in df.columns and v != k:
+                      df[v] = df[k]
+              return df
+
+          def try_em():
+              import akshare as ak
+              return ak.stock_zh_a_spot_em()
+
+          df = None
+          for attempt, fetcher in enumerate([try_sina, try_em], 1):
+              try:
+                  print(f' 尝试数据源 {attempt}...')
+                  df = fetcher()
+                  print(f' 全市场 {len(df)} 只')
+                  break
+              except Exception as e:
+                  print(f' 失败: {e}')
+                  time.sleep(random.uniform(2,5))
+
+          if df is None:
+              print('所有数据源均失败')
+              sys.exit(0)
+
           import pandas as pd
- 
-          print('🔍 开始全市场短线选股...')
- 
-          # 获取全A股实时行情
-          df = ak.stock_zh_a_spot_em()
-          print(f'📊 全市场共 {len(df)} 只股票')
- 
-          # 排除ST、退市、新股(N开头)
           df = df[~df['名称'].str.contains('ST|退', na=False)]
-          df = df[~df['代码'].str.startswith('N')]
-          print(f'✅ 排除ST/退市/新股后: {len(df)} 只')
- 
-          # 短线筛选条件
+          df = df[~df['代码'].astype(str).str.startswith('N')]
+
           min_change = float('$SCREENER_MIN_CHANGE')
           max_change = float('$SCREENER_MAX_CHANGE')
-          min_vol_ratio = float('$SCREENER_MIN_VOLUME_RATIO')
+          min_vr = float('$SCREENER_MIN_VOLUME_RATIO')
           max_mcap = float('$SCREENER_MAX_MARKET_CAP')
-          min_turnover = float('$SCREENER_MIN_TURNOVER')
-          max_turnover = float('$SCREENER_MAX_TURNOVER')
- 
-          # 筛选
-          mask = (
-              (df['涨跌幅'] >= min_change) &
-              (df['涨跌幅'] <= max_change) &
-              (df['量比'] >= min_vol_ratio) &
-              (df['换手率'] >= min_turnover) &
-              (df['换手率'] <= max_turnover)
-          )
- 
-          # 市值筛选（如果字段存在）
-          if '总市值' in df.columns:
-              mask = mask & (df['总市值'] <= max_mcap * 1e8)
- 
-          result = df[mask].copy()
- 
-          # 按量比排序，取Top
-          max_stocks = int('$SCREENER_MAX_STOCKS')
-          result = result.sort_values('量比', ascending=False).head(max_stocks)
- 
-          # 输出股票代码列表
-          stock_list = ','.join(result['代码'].tolist())
- 
-          if not stock_list:
-              print('⚠️ 未筛选到符合条件的股票，使用默认兜底列表')
-              stock_list = '600519,300750,002594'
- 
-          print(f'🎯 筛选结果 ({len(result)} 只): {stock_list}')
-          for _, row in result.iterrows():
-              print(f'  {row[\"代码\"]} {row[\"名称\"]} 涨幅:{row[\"涨跌幅\"]}% 量比:{row[\"量比\"]} 换手率:{row[\"换手率\"]}%')
- 
-          # 输出到 GitHub Actions output
-          with open('/tmp/stock_list.txt', 'w') as f:
-              f.write(stock_list)
-          "
- 
-          # 读取并设置 STOCK_LIST
-          STOCK_LIST=$(cat /tmp/stock_list.txt)
+          min_to = float('$SCREENER_MIN_TURNOVER')
+          max_to = float('$SCREENER_MAX_TURNOVER')
+          max_n = int('$SCREENER_MAX_STOCKS')
+
+          cols = df.columns.tolist()
+          mask = pd.Series(True, index=df.index)
+          if '涨跌幅' in cols: mask &= df['涨跌幅'].between(min_change, max_change)
+          if '量比' in cols: mask &= df['量比'] >= min_vr
+          if '换手率' in cols: mask &= df['换手率'].between(min_to, max_to)
+          if '总市值' in cols: mask &= df['总市值'] <= max_mcap * 1e8
+
+          result = df[mask].sort_values('量比' if '量比' in cols else '涨跌幅', ascending=False).head(max_n)
+          codes = ','.join(result['代码'].astype(str).tolist())
+          print(f'选中 {len(result)} 只: {codes}')
+          for _,r in result.iterrows():
+              print(f'  {r[\"代码\"]} {r[\"名称\"]} 涨跌幅:{r.get(\"涨跌幅\",\"?\")}% 量比:{r.get(\"量比\",\"?\")}')
+          print(codes, end='')
+          ")
+
+          if [ -z "$STOCK_LIST" ]; then
+            STOCK_LIST="600519,300750,002594"
+            echo "⚠️ 降级为默认股票列表"
+          fi
           echo "STOCK_LIST=$STOCK_LIST" >> $GITHUB_ENV
-          echo "📋 STOCK_LIST 已设置为: $STOCK_LIST"
- 
+          echo "📋 STOCK_LIST = $STOCK_LIST"
+
       - name: 执行股票分析
         env:
           GENERATION_BACKEND: ${{ vars.GENERATION_BACKEND || secrets.GENERATION_BACKEND }}
@@ -380,24 +383,23 @@ jobs:
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
           ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
- 
+
         run: |
-          # 优先使用筛股步骤动态生成的 STOCK_LIST
           if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
             export STOCK_LIST="$STOCK_LIST_CONFIG"
           elif [ -z "${STOCK_LIST:-}" ]; then
             export STOCK_LIST="600519"
           fi
- 
+
           if [ -n "$LITELLM_CONFIG_YAML" ] && [ -n "$LITELLM_CONFIG" ]; then
             echo "📝 使用 GitHub Actions Secrets/Variables 中的 LITELLM_CONFIG_YAML 配置"
             mkdir -p "$(dirname "$LITELLM_CONFIG")"
             echo "$LITELLM_CONFIG_YAML" > "$LITELLM_CONFIG"
             echo "✅ LITELLM 配置文件已写入: $LITELLM_CONFIG"
           fi
- 
+
           MODE="${{ github.event.inputs.mode || 'full' }}"
- 
+
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统"
           echo "=========================================="
@@ -406,43 +408,13 @@ jobs:
           echo "📊 自选股: $STOCK_LIST"
           echo "📝 报告类型: $REPORT_TYPE"
           echo ""
- 
-          echo "=========================================="
-          echo "📋 配置检查"
-          echo "=========================================="
-          echo "【AI 配置】"
-          if [ -n "$LITELLM_CONFIG" ] || [ -n "$LITELLM_API_KEY" ] || [ -n "$LITELLM_MODEL" ] || [ -n "$ANSPIRE_API_KEYS" ]; then
-            echo "  LiteLLM: ✅ 已配置"
-          else
-            echo "  LiteLLM: ❌ 未配置"
-          fi
-          echo "  Gemini API Key: $([ -n "$GEMINI_API_KEY" ] && echo '✅ 已配置' || echo '❌ 未配置')"
-          echo "  DeepSeek Key:   $([ -n "$DEEPSEEK_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  Anspire Key:    $([ -n "$ANSPIRE_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  AIHubMix Key:   $([ -n "$AIHUBMIX_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  OpenAI API Key: $([ -n "$OPENAI_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  Anthropic Key:  $([ -n "$ANTHROPIC_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo ""
-          echo "【数据源】"
-          echo "  Tushare Token: $([ -n "$TUSHARE_TOKEN" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  TickFlow:      $([ -n "$TICKFLOW_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo ""
-          echo "【搜索引擎】"
-          echo "  Bocha API Keys: $([ -n "$BOCHA_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  Tavily API Keys: $([ -n "$TAVILY_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  SerpAPI Keys: $([ -n "$SERPAPI_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo ""
-          echo "【通知渠道】"
-          echo "  飞书: $( ([ -n "$FEISHU_WEBHOOK_URL" ] || ([ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ] && [ -n "$FEISHU_CHAT_ID" ]) ) && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "=========================================="
-          echo ""
- 
+
           FORCE_RUN_ARG=""
           if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
             FORCE_RUN_ARG="--force-run"
             echo "⚡ 已启用强制运行模式（跳过交易日检查）"
           fi
- 
+
           if [ "$MODE" = "market-only" ]; then
             python main.py --market-review $FORCE_RUN_ARG
           elif [ "$MODE" = "stocks-only" ]; then
@@ -450,7 +422,7 @@ jobs:
           else
             python main.py $FORCE_RUN_ARG
           fi
- 
+
       - name: 上传分析报告
         uses: actions/upload-artifact@v6
         if: always()
@@ -460,7 +432,7 @@ jobs:
             reports/
             logs/
           retention-days: 30
- 
+
       - name: 显示运行结果
         if: always()
         run: |
@@ -468,15 +440,3 @@ jobs:
           echo "=========================================="
           echo "📊 分析完成"
           echo "=========================================="
-          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
-            echo "生成的报告:"
-            ls -la reports/
-          else
-            echo "⚠️ 未生成报告文件"
-          fi
-          echo ""
-          if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
-            echo "📜 最近日志（最后 30 行）:"
-            tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
-          fi
- 
