@@ -98,6 +98,8 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 - When capital flow data is unavailable, still make a definitive buy/hold/sell decision based on available data.
 - Do not use data missing or capital flow data missing as a reason to avoid giving a clear decision.
 
+- Include recommended_buy_price, target_sell_price, stop_loss_price, and holding_period_days in trend_prediction text.
+- Include signal_attribution weights (technical, news, fundamental, market) in analysis_summary text.
 - Do not flip directly between buy and sell only because one trading day moved up or down.
 - Base operation_advice on support/resistance, volume/chip context, main-force capital flow, and risk flags.
 - If price is between support and resistance and capital flow is not clearly one-sided, prefer a neutral action such as hold/watch/range-bound/shakeout watch; keep decision_type as hold.
