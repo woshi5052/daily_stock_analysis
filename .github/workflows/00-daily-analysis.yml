@@ -52,6 +52,44 @@ jobs:
         run: |
           mkdir -p data logs reports
 
+      - name: 市场环境护航
+        id: guardrail
+        run: |
+          python3 2>/dev/null -c "
+          import akshare as ak, json, logging
+          logging.disable(logging.CRITICAL)
+          try:
+              df = ak.stock_zh_index_daily(symbol='sh000001')
+              recents = df.tail(10)
+              last = recents.iloc[-1]
+              prev = recents.iloc[-2] if len(recents) > 1 else None
+              bounce_hint = ''
+              if prev is not None:
+                  prev_pct = (prev['close'] - prev['open']) / prev['open'] * 100
+                  if prev_pct < -2.0:
+                      hist = df.tail(1000)
+                      crash_days = hist[(hist['close'] - hist['open']) / hist['open'] * 100 < -2.0]
+                      next_day_up = sum(
+                          1 for i in crash_days.index[:-1]
+                          if i in hist.index[:-1]
+                          and hist.loc[hist.index[hist.index.get_loc(i)+1], 'close']
+                          > hist.loc[hist.index[hist.index.get_loc(i)+1], 'open']
+                      )
+                      total = max(len(crash_days) - 1, 1)
+                      rebound_prob = round(next_day_up / total * 100)
+                      bounce_hint = (
+                          f'【市场护航】前日上证暴跌{prev_pct:.2f}%。'
+                          f'近4年暴跌>2%后次日反弹概率{rebound_prob}%。'
+                          f'请勿单纯外推前日恐慌，需考虑均值回归与超跌修复可能。'
+                      )
+              output = {'bounce_hint': bounce_hint, 'date': str(last['date'])}
+              with open('/tmp/market_guardrail.json', 'w') as f:
+                  json.dump(output, f, ensure_ascii=False)
+          except Exception as e:
+              with open('/tmp/market_guardrail.json', 'w') as f:
+                  json.dump({'bounce_hint': ''}, f)
+          "
+
       - name: 短线全市场选股
         id: screener
         env:
@@ -63,11 +101,10 @@ jobs:
           SCREENER_MAX_TURNOVER: ${{ vars.SCREENER_MAX_TURNOVER || '15' }}
           SCREENER_MAX_STOCKS: ${{ vars.SCREENER_MAX_STOCKS || '20' }}
         run: |
-          echo '🔍 开始短线选股...'
+          echo '🔍 开始短线选股（仅上海A股）...'
           STOCK_LIST=$(python3 2>/dev/null -c "
           import time, random, sys, logging
           logging.disable(logging.CRITICAL)
-
           def try_sina():
               import akshare as ak
               df = ak.stock_zh_a_spot()
@@ -76,11 +113,9 @@ jobs:
                   if k in df.columns and v != k:
                       df[v] = df[k]
               return df
-
           def try_em():
               import akshare as ak
               return ak.stock_zh_a_spot_em()
-
           df = None
           for attempt, fetcher in enumerate([try_sina, try_em], 1):
               try:
@@ -88,14 +123,12 @@ jobs:
                   break
               except Exception as e:
                   time.sleep(random.uniform(2,5))
-
           if df is None:
               sys.exit(0)
-
           import pandas as pd
+          df = df[df['代码'].astype(str).str.match(r'^(60|688)\d{4}$')]
           df = df[~df['名称'].str.contains('ST|退', na=False)]
           df = df[~df['代码'].astype(str).str.startswith('N')]
-
           min_change = float('$SCREENER_MIN_CHANGE')
           max_change = float('$SCREENER_MAX_CHANGE')
           min_vr = float('$SCREENER_MIN_VOLUME_RATIO')
@@ -103,27 +136,43 @@ jobs:
           min_to = float('$SCREENER_MIN_TURNOVER')
           max_to = float('$SCREENER_MAX_TURNOVER')
           max_n = int('$SCREENER_MAX_STOCKS')
-
           cols = df.columns.tolist()
           mask = pd.Series(True, index=df.index)
           if '涨跌幅' in cols: mask &= df['涨跌幅'].between(min_change, max_change)
           if '量比' in cols: mask &= df['量比'] >= min_vr
           if '换手率' in cols: mask &= df['换手率'].between(min_to, max_to)
           if '总市值' in cols: mask &= df['总市值'] <= max_mcap * 1e8
-
           result = df[mask].sort_values('量比' if '量比' in cols else '涨跌幅', ascending=False).head(max_n)
           codes = ','.join(result['代码'].astype(str).tolist())
           print(codes)
           ")
-
           if [ -z "$STOCK_LIST" ]; then
-            STOCK_LIST="${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519,300750,002594' }}"
+            STOCK_LIST="${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519,600036,601318' }}"
             echo "⚠️ 选股无结果，降级为兜底列表"
           else
-            echo "✅ 选股完成: $(echo $STOCK_LIST | tr ',' '\n' | wc -l) 只"
+            echo "✅ 选股完成: $(echo $STOCK_LIST | tr ',' '\n' | wc -l) 只上海A股"
           fi
           echo "STOCK_LIST=$STOCK_LIST" >> $GITHUB_ENV
           echo "📋 STOCK_LIST = $STOCK_LIST"
+
+      - name: 注入分析提示词
+        run: |
+          GUARDRAIL=$(python3 -c "import json; d=json.load(open('/tmp/market_guardrail.json')); print(d.get('bounce_hint',''))")
+          cat > /tmp/custom_context.txt << 'PROMPT_EOF'
+          【短线交易角色设定】
+          你是一个专注A股短线交易的量化分析师，持仓周期为3-5个交易日。
+          你的分析必须简洁、直接、可执行。
+
+          【输出格式要求 - 必须严格遵守】
+          每只股票分析不得超过8行，必须包含以下字段：
+          1. 评分 (0-100) | 方向 (看多/震荡/看空) | 决策 (买入/观望/卖出)
+          2. 建议买入价 | 目标卖出价 | 止损价 | 建议持股周期(3-5个交易日)
+          3. 一句话决策理由（不超过20字）
+          禁止输出冗长的基本面分析、板块分析和检查清单。
+          禁止输出"空仓观望"等含糊表述，必须给出明确的价格和方向。
+          PROMPT_EOF
+          echo "$GUARDRAIL" >> /tmp/custom_context.txt
+          echo "📝 护航信息: $GUARDRAIL"
 
       - name: 执行股票分析
         env:
@@ -368,17 +417,20 @@ jobs:
           SNAPSHOT_SOURCE_PRIORITY: ${{ vars.SNAPSHOT_SOURCE_PRIORITY || secrets.SNAPSHOT_SOURCE_PRIORITY || 'sina,efinance,akshare_em' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
           MARKET_REVIEW_COLOR_SCHEME: ${{ vars.MARKET_REVIEW_COLOR_SCHEME || secrets.MARKET_REVIEW_COLOR_SCHEME || 'green_up' }}
-          REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
+          REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'brief' }}
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
           REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
-          ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
+          NEWS_STRATEGY_PROFILE: ${{ vars.NEWS_STRATEGY_PROFILE || secrets.NEWS_STRATEGY_PROFILE || 'ultra_short' }}
+          NEWS_MAX_AGE_DAYS: ${{ vars.NEWS_MAX_AGE_DAYS || secrets.NEWS_MAX_AGE_DAYS || '1' }}
+          ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '3' }}
           TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
           LOG_LEVEL: INFO
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
           ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
+
         run: |
           if [ -z "${STOCK_LIST:-}" ]; then
             if [ -n "${STOCK_LIST_CONFIG:-}" ]; then
@@ -403,7 +455,8 @@ jobs:
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "🎯 运行模式: $MODE"
           echo "📊 自选股: $STOCK_LIST"
-          echo "📝 报告类型: $REPORT_TYPE"
+          echo "📝 报告类型: brief (精简)"
+          echo "📡 新闻窗口: 1天 (超短线)"
           echo ""
 
           FORCE_RUN_ARG=""
