@@ -282,3 +282,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
             ctx.set_data("final_dashboard_raw", raw_text)
             logger.warning("[DecisionAgent] failed to parse dashboard JSON")
             return None
+
+**MUST FOLLOW**: Never use data missing or capital flow data unavailable as an excuse.
+When data is unavailable, make a definitive buy/hold/sell decision using available data.
+analysis_summary and trend_prediction are REQUIRED even when data sources are unavailable.
