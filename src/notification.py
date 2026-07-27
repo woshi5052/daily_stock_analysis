@@ -857,7 +857,20 @@ class NotificationService(
                     f"{emoji} **{self._get_display_name(r, report_language)}({r.code})**: "
                     f"{signal_text} | "
                     f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                    f"{localize_trend_prediction(r.trend_prediction, report_language)
+                # Add price info from dashboard
+                price_data = getattr(r, "dashboard", None) or getattr(r, "raw_data", None) or {}
+                buy_p = None
+                if isinstance(price_data, dict):
+                    buy_p = price_data.get("recommended_buy_price") or getattr(r, "recommended_buy_price", None)
+                else:
+                    buy_p = getattr(r, "recommended_buy_price", None)
+                if buy_p:
+                    sell_p = getattr(r, "target_sell_price", None) or (price_data.get("target_sell_price") if isinstance(price_data, dict) else None)
+                    stop_p = getattr(r, "stop_loss_price", None) or (price_data.get("stop_loss_price") if isinstance(price_data, dict) else None)
+                    hold_d = getattr(r, "holding_period_days", None) or (price_data.get("holding_period_days") if isinstance(price_data, dict) else None)
+                    report_lines.append(f"买入价:{buy_p} 目标价:{sell_p or chr(8212)} 止损价:{stop_p or chr(8212)} 持股:{hold_d or chr(8212)}日")
+}"
                 )
         else:
             report_lines.extend([f"## 📈 {labels['report_title']}", ""])
