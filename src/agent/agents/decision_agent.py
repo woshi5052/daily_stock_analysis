@@ -102,8 +102,15 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 Return a valid JSON object following the Decision Dashboard schema.  The JSON \
 must include at minimum these top-level keys:
   stock_name, sentiment_score, trend_prediction, operation_advice,
+  recommended_buy_price, target_sell_price, stop_loss_price, holding_period_days,
   decision_type, confidence_level, dashboard, analysis_summary,
-  key_points, risk_warning
+  key_points, risk_warning, signal_attribution
+
+
+The ``signal_attribution`` object must include: technical, news, fundamental, market_environment - each a number 0-100 representing percentage weight, summing to 100.
+
+``recommended_buy_price``, ``target_sell_price``, ``stop_loss_price`` must be concrete numbers.
+``holding_period_days`` must be an integer (3-5).
 
 Important: ``decision_type`` must stay within the existing enum
 ``buy|hold|sell``. Express stronger conviction via ``confidence_level``,
