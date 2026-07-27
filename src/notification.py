@@ -855,6 +855,13 @@ class NotificationService(
                 signal_text, emoji, _ = self._get_signal_level(r)
                 report_lines.append(
                     f"{emoji} **{self._get_display_name(r, report_language)}({r.code})**: "
+
+                bp = getattr(r, 'recommended_buy_price', None)
+                if bp:
+                    _sp = getattr(r, 'target_sell_price', '-')
+                    _sl = getattr(r, 'stop_loss_price', '-')
+                    _hp = getattr(r, 'holding_period_days', '-')
+                    report_lines.append('买入价:' + str(bp) + ' 目标价:' + str(_sp) + ' 止损价:' + str(_sl) + ' 持股:' + str(_hp) + '日')
                     f"{signal_text} | "
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)
