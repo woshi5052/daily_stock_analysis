@@ -134,7 +134,7 @@ jobs:
           if '涨跌幅' in cols: mask &= df['涨跌幅'].between(min_change, max_change)
           if '量比' in cols: mask &= df['量比'] >= min_vr
           if '换手率' in cols: mask &= df['换手率'].between(min_to, max_to)
-          if '总市值' in cols: mask &= df['总市值'] <= max_mcap * 1e8
+          if '总市值' in cols: mask &= df['总市值'].fillna(0) <= max_mcap * 1e8
           result = df[mask].sort_values('量比' if '量比' in cols else '涨跌幅', ascending=False).head(max_n)
           codes = ','.join(result['代码'].astype(str).tolist())
           print(codes)
