@@ -126,7 +126,7 @@ jobs:
           if df is None:
               sys.exit(0)
           import pandas as pd
-          df = df[df['代码'].astype(str).str.match(r'^(60|688)\d{4}$')]
+          df = df[df['代码'].astype(str).str.match(r'^60\d{4}$', na=False)]
           df = df[~df['名称'].str.contains('ST|退', na=False)]
           df = df[~df['代码'].astype(str).str.startswith('N')]
           min_change = float('$SCREENER_MIN_CHANGE')
