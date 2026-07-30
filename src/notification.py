@@ -935,6 +935,17 @@ class NotificationService(
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
+
+                dd = getattr(r, 'dashboard', None)
+                if dd is None or not isinstance(dd, dict):
+                    dd = getattr(r, 'raw_data', None)
+                if isinstance(dd, dict):
+                    bp = dd.get('recommended_buy_price')
+                    if bp:
+                        _sp = dd.get('target_sell_price', '-')
+                        _sl = dd.get('stop_loss_price', '-')
+                        _hp = dd.get('holding_period_days', '-')
+                        report_lines.append('买入价:' + str(bp) + ' 目标价:' + str(_sp) + ' 止损价:' + str(_sl) + ' 持股:' + str(_hp) + '日')
         else:
             report_lines.extend([f"## 📈 {labels['report_title']}", ""])
             # 逐个股票的详细分析
