@@ -938,20 +938,17 @@ class NotificationService(
 
                 dd = getattr(r, 'dashboard', None)
                 if dd is None or not isinstance(dd, dict):
+                    dd = getattr(r, 'raw_data', None)                dd = getattr(r, 'dashboard', None)
+                if dd is None or not isinstance(dd, dict):
                     dd = getattr(r, 'raw_data', None)
                 if isinstance(dd, dict):
-                    bp = dd.get('recommended_buy_price')
-                    if bp:
+                    _bp = dd.get('recommended_buy_price')
+                    if _bp:
                         _sp = dd.get('target_sell_price', '-')
                         _sl = dd.get('stop_loss_price', '-')
                         _hp = dd.get('holding_period_days', '-')
-                        report_lines.append('买入价:' + str(bp) + ' 目标价:' + str(_sp) + ' 止损价:' + str(_sl) + ' 持股:' + str(_hp) + '日')
-        else:
-            report_lines.extend([f"## 📈 {labels['report_title']}", ""])
-            # 逐个股票的详细分析
-            for result in sorted_results:
-                signal_text, emoji, _ = self._get_signal_level(result)
-                confidence_stars = result.get_confidence_stars() if hasattr(result, 'get_confidence_stars') else '⭐⭐'
+                        report_lines.append('买入价:' + str(_bp) + ' 目标价:' + str(_sp) + ' 止损价:' + str(_sl) + ' 持股:' + str(_hp) + '日')
+
 
                 report_lines.extend([
                     f"### {emoji} {self._get_display_name(result, report_language)} ({result.code})",
