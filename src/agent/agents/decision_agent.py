@@ -92,14 +92,6 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 - 0-19: sell (major risk + bearish)
 
 ## Actionability Guardrails
-- MUST include recommended_buy_price, target_sell_price, and stop_loss_price in every analysis.
-- MUST include specific holding_period_days (3-5 trading days).
-- MUST include signal_attribution object with technical_indicators, news_sentiment, fundamentals, market_conditions weights.
-- When capital flow data is unavailable, still make a definitive buy/hold/sell decision based on available data.
-- Do not use data missing or capital flow data missing as a reason to avoid giving a clear decision.
-
-- Include recommended_buy_price, target_sell_price, stop_loss_price, and holding_period_days in trend_prediction text.
-- Include signal_attribution weights (technical, news, fundamental, market) in analysis_summary text.
 - Do not flip directly between buy and sell only because one trading day moved up or down.
 - Base operation_advice on support/resistance, volume/chip context, main-force capital flow, and risk flags.
 - If price is between support and resistance and capital flow is not clearly one-sided, prefer a neutral action such as hold/watch/range-bound/shakeout watch; keep decision_type as hold.
@@ -110,15 +102,8 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 Return a valid JSON object following the Decision Dashboard schema.  The JSON \
 must include at minimum these top-level keys:
   stock_name, sentiment_score, trend_prediction, operation_advice,
-  recommended_buy_price, target_sell_price, stop_loss_price, holding_period_days,
   decision_type, confidence_level, dashboard, analysis_summary,
-  key_points, risk_warning, signal_attribution
-
-
-The ``signal_attribution`` object must include: technical, news, fundamental, market_environment - each a number 0-100 representing percentage weight, summing to 100.
-
-``recommended_buy_price``, ``target_sell_price``, ``stop_loss_price`` must be concrete numbers.
-``holding_period_days`` must be an integer (3-5).
+  key_points, risk_warning
 
 Important: ``decision_type`` must stay within the existing enum
 ``buy|hold|sell``. Express stronger conviction via ``confidence_level``,
@@ -129,17 +114,6 @@ The nested ``dashboard`` object must include ``phase_decision`` with these
 keys: ``phase_context``, ``action_window``, ``immediate_action``,
 ``watch_conditions``, ``next_check_time``, ``confidence_reason``,
 ``data_limitations``. For intraday/lunch-break/near-close phases, describe the
-should include optional ``signal_attribution`` when
-the available evidence supports attribution, with these keys: ``technical_indicators``, ``news_sentiment``, ``fundamentals``,
-``market_conditions``, ``strongest_bullish_signal``, ``strongest_bearish_signal``.
-The first four keys are contribution weights (0-100). Non-zero valid weights
-should sum to 100; all-zero means no effective signal and must not be faked.
-``technical_indicators`` explains the impact of technical signals on the recommendation.
-``news_sentiment`` explains the impact of news/sentiment on the recommendation.
-``fundamentals`` explains the impact of fundamental factors (valuation, earnings, financials) on the recommendation.
-``market_conditions`` explains the impact of overall market environment on the recommendation.
-``strongest_bullish_signal`` is the name of the strongest bullish signal (e.g., MACD golden cross, earnings surprise, low valuation).
-``strongest_bearish_signal`` is the name of the strongest bearish signal (e.g., MA death cross, earnings warning, high valuation).
 current action, watch conditions, and next check point. For pre-market,
 non-trading, or unknown phases, do not invent today's intraday movement. If
 quote, daily bars, or technical data is stale, fallback, missing, fetch_failed,
@@ -198,9 +172,12 @@ should sum to 100; all-zero means no effective signal and must not be faked.
                 "",
             ]
 
-        # Feed prior opinions
+        # Feed prior opinions — Orchestrator已在 _partition_skill_opinions 中完成
+        # skill 观点的分拣，ctx.opinions 中不再含 invalid skill opinion；
+        # invalid skill 观点存于 ctx.meta["invalid_opinions"]。
+        # DecisionAgent 直接消费，不再二次过滤。
         if ctx.opinions:
-            parts.append("## Agent Opinions")
+            parts.append("## Agent Opinions (Evidence Chain)")
             for op in ctx.opinions:
                 parts.append(f"\n### {op.agent_name}")
                 parts.append(f"Signal: {op.signal} | Confidence: {op.confidence:.2f}")
@@ -209,10 +186,36 @@ should sum to 100; all-zero means no effective signal and must not be faked.
                     parts.append(f"Key levels: {json.dumps(op.key_levels)}")
                 if op.raw_data:
                     extra_keys = {k: v for k, v in op.raw_data.items()
-                                  if k not in ("signal", "confidence", "reasoning", "key_levels")}
+                                  if k not in ("signal", "confidence", "reasoning", "key_levels", "invalid_signal")}
                     if extra_keys:
                         parts.append(f"Extra data: {json.dumps(extra_keys, ensure_ascii=False, default=str)}")
                 parts.append("")
+
+        invalid_opinions = ctx.meta.get("invalid_opinions") or []
+        if invalid_opinions:
+            reason_labels = {
+                "skill_timeout": "执行超时",
+                "skill_error": "执行异常或未产出结构化观点",
+                "missing_signal": "signal 缺失",
+                "unrecognized_signal": "signal 无法识别",
+            }
+            reason_counts = {}
+            for item in invalid_opinions:
+                if not isinstance(item, dict):
+                    continue
+                reason = str(item.get("reason") or "unrecognized_signal")
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            reason_summary = "、".join(
+                f"{reason_labels.get(reason, reason)} {count} 个"
+                for reason, count in reason_counts.items()
+            )
+            parts.append("## Invalid Skill Opinions (Diagnostics only — not in evidence chain)")
+            parts.append(
+                f"共 {len(invalid_opinions)} 个 skill 观点未进入证据链"
+                f"（{reason_summary or '原因未分类'}）；"
+                f"仅供你在 data_limitations 中标注，不得作为决策依据。"
+            )
+            parts.append("")
 
         # Feed risk flags
         if ctx.risk_flags:
@@ -284,7 +287,3 @@ should sum to 100; all-zero means no effective signal and must not be faked.
             ctx.set_data("final_dashboard_raw", raw_text)
             logger.warning("[DecisionAgent] failed to parse dashboard JSON")
             return None
-
-**MUST FOLLOW**: Never use data missing or capital flow data unavailable as an excuse.
-When data is unavailable, make a definitive buy/hold/sell decision using available data.
-analysis_summary and trend_prediction are REQUIRED even when data sources are unavailable.
